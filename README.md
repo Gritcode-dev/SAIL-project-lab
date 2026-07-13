@@ -5,7 +5,7 @@ An interactive, edge-computed neural network constructor and real-time visualize
 This application allows users to provision fully connected dense neural networks, capture custom image datasets via a live webcam stream, manually override hidden layer node biases, and observe live backpropagation and weight optimization on a dynamic HTML5 Canvas.
 
 ## 🚀 Live Demo
-Deploying to GitHub Pages. Click here to open the lab: `https://cirqlar-official.github.io/sail-architect-lab/`
+Deploying to GitHub Pages. Click here to open the lab: `https://cirqlar-official.github.io/SAIL-project-lab/`
 
 ## 🧠 Core Features
 * **Edge-Computed Training:** Powered by `TensorFlow.js`, models compile and train natively on your device without server-side dependencies.
