@@ -115,18 +115,18 @@
                 <div class="mb-5">
                     <div class="flex justify-between text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
                         <span>Learning Rate</span>
-                        <span id="lrVal" class="mono" style="color: var(--muted-blue);">0.01</span>
+                        <span id="lrVal" class="mono" style="color: var(--muted-blue);">0.002</span>
                     </div>
-                    <input type="range" id="lrRange" min="0.001" max="0.1" step="0.001" value="0.01" class="w-full cursor-pointer">
+                    <input type="range" id="lrRange" min="0.0005" max="0.02" step="0.0005" value="0.002" class="w-full cursor-pointer">
                 </div>
                 
                 <div class="space-y-2">
                     <span class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Activation Function</span>
                     <select id="activationSelect" class="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-bold text-slate-700 outline-none focus:border-slate-400 cursor-pointer">
                         <option value="relu">ReLU (Non-Linear)</option>
-                        <option value="linear">Linear (Straight)</option>
-                        <option value="tanh">Tanh (S-Curve)</option>
+                        <option value="tanh">Tanh (Zero-Centered)</option>
                         <option value="sigmoid">Sigmoid</option>
+                        <option value="linear">Linear (Straight)</option>
                     </select>
                 </div>
             </div>
@@ -182,7 +182,6 @@
     </div>
 
     <script>
-        // Initialize Icons
         lucide.createIcons();
 
         // Application State
@@ -191,12 +190,12 @@
                 { id: 0, name: 'Target Alpha', data: [], color: '#457B9D' }, 
                 { id: 1, name: 'Target Beta', data: [], color: '#E63946' }    
             ],
-            layers: [5, 4],
+            layers: [10, 6],
             model: null,
             isTraining: false,
             nodes: [],
             draggedNode: null,
-            lr: 0.01,
+            lr: 0.002,
             captureInterval: null,
             epoch: 0,
             webcamActive: false
@@ -206,6 +205,7 @@
         const ctx = canvas.getContext('2d');
         const video = document.getElementById('webcam');
         let lossChart;
+        let isInferring = false;
 
         async function init() {
             initCharts();
@@ -225,7 +225,6 @@
                 document.getElementById('webcamWarning').classList.remove('hidden');
             }
 
-            // Secure Canvas Resizing
             const resizeObserver = new ResizeObserver(entries => {
                 for (let entry of entries) {
                     canvas.width = entry.contentRect.width;
@@ -238,7 +237,6 @@
             requestAnimationFrame(renderLoop);
         }
 
-        // View Toggling
         function switchLeftTab(tabId) {
             const btnRec = document.getElementById('tabToggleRecord');
             const btnInsp = document.getElementById('tabToggleInspect');
@@ -259,18 +257,17 @@
             }
         }
 
-        // Model Management
         function rebuildModel() {
-            if(state.isTraining) return; // Lock
+            if(state.isTraining) return;
 
             if (state.model) state.model.dispose();
             const model = tf.sequential();
             const activation = document.getElementById('activationSelect').value;
 
-            // 28x28 grayscale flattened
-            model.add(tf.layers.dense({ units: state.layers[0], activation: activation, inputShape: [784] }));
-            state.layers.slice(1).forEach(u => model.add(tf.layers.dense({ units: u, activation: activation })));
-            model.add(tf.layers.dense({ units: state.classes.length, activation: 'softmax' }));
+            // Input: 28x28 grayscale flattened = 784
+            model.add(tf.layers.dense({ units: state.layers[0], activation: activation, inputShape: [784], kernelInitializer: 'glorotNormal' }));
+            state.layers.slice(1).forEach(u => model.add(tf.layers.dense({ units: u, activation: activation, kernelInitializer: 'glorotNormal' })));
+            model.add(tf.layers.dense({ units: state.classes.length, activation: 'softmax', kernelInitializer: 'glorotNormal' }));
             
             model.compile({ optimizer: tf.train.adam(state.lr), loss: 'categoricalCrossentropy' });
             state.model = model;
@@ -287,13 +284,11 @@
                     else el.classList.remove('disabled-ui');
                 }
             });
-            // Disable capture buttons
             document.querySelectorAll('.capture-btn').forEach(btn => {
                 btn.disabled = locked;
                 if(locked) btn.classList.add('opacity-50', 'pointer-events-none');
                 else btn.classList.remove('opacity-50', 'pointer-events-none');
             });
-            // Disable delete buttons in UI
             document.querySelectorAll('.del-class-btn').forEach(btn => {
                 if(locked) btn.classList.add('hidden');
                 else btn.classList.remove('hidden');
@@ -302,8 +297,11 @@
 
         async function train() {
             if (state.isTraining) { 
-                state.isTraining = false; 
-                if(state.model) state.model.stopTraining = true;
+                if (state.model) state.model.stopTraining = true;
+                const btn = document.getElementById('trainBtn');
+                btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> HALTING...`;
+                btn.classList.add('opacity-75', 'pointer-events-none');
+                lucide.createIcons();
                 return; 
             }
             
@@ -314,11 +312,13 @@
             }
 
             state.isTraining = true;
+            if (state.model) state.model.stopTraining = false;
             toggleUILock(true);
             
             const btn = document.getElementById('trainBtn');
             const status = document.getElementById('statusTag');
             
+            btn.classList.remove('opacity-75', 'pointer-events-none');
             btn.innerHTML = `<i data-lucide="square" class="w-4 h-4 fill-current"></i> HALT COMPILATION`;
             btn.style.backgroundColor = "var(--coral)";
             status.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> RUNNING`;
@@ -333,8 +333,7 @@
                 });
             });
 
-            // Prevent empty tensor crashes
-            if(xArr.length === 0) {
+            if (xArr.length === 0) {
                 state.isTraining = false;
                 toggleUILock(false);
                 return;
@@ -345,34 +344,36 @@
 
             try {
                 await state.model.fit(xs, ys, {
-                    epochs: 10000,
+                    epochs: 5000,
                     batchSize: Math.min(16, xArr.length),
+                    shuffle: true,
                     callbacks: {
-                        onEpochEnd: (epoch, logs) => {
+                        onEpochEnd: async (epoch, logs) => {
                             state.epoch = epoch;
                             document.getElementById('epochCounter').innerText = epoch.toString().padStart(4, '0');
                             updateLoss(logs.loss);
-                            if (!state.isTraining) state.model.stopTraining = true;
+                            await tf.nextFrame();
                         }
                     }
                 });
             } catch (e) {
-                console.error("Training interrupted", e);
+                console.error("Training interrupted:", e);
+            } finally {
+                xs.dispose(); 
+                ys.dispose();
+                
+                state.isTraining = false;
+                if (state.model) state.model.stopTraining = false;
+                toggleUILock(false);
+                
+                btn.classList.remove('opacity-75', 'pointer-events-none');
+                btn.innerHTML = `<i data-lucide="play" class="w-4 h-4 fill-current"></i> TRAIN MODEL`;
+                btn.style.backgroundColor = "var(--dark-blue)";
+                status.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-slate-300"></span> STANDBY`;
+                lucide.createIcons();
             }
-
-            xs.dispose(); 
-            ys.dispose();
-            
-            state.isTraining = false;
-            toggleUILock(false);
-            
-            btn.innerHTML = `<i data-lucide="play" class="w-4 h-4 fill-current"></i> COMPILE MODEL`;
-            btn.style.backgroundColor = "var(--dark-blue)";
-            status.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-slate-300"></span> STANDBY`;
-            lucide.createIcons();
         }
 
-        // Graphics and Nodes
         function initNodes() {
             state.nodes = [];
             if(canvas.width === 0 || canvas.height === 0) return;
@@ -396,7 +397,6 @@
         }
 
         function renderLoop() {
-            // Safe clear
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
             // Physics
@@ -419,21 +419,19 @@
                                 const absV = Math.abs(val);
                                 ctx.beginPath();
                                 ctx.moveTo(n1.x, n1.y); ctx.lineTo(n2.x, n2.y);
-                                ctx.lineWidth = Math.max(0.6, Math.min(absV * 6, 10));
-                                ctx.strokeStyle = val > 0 ? `rgba(69, 123, 157, ${0.15 + Math.min(absV * 0.5, 0.8)})` : `rgba(230, 57, 70, ${0.15 + Math.min(absV * 0.5, 0.8)})`;
+                                ctx.lineWidth = Math.max(0.6, Math.min(absV * 5, 8));
+                                ctx.strokeStyle = val > 0 ? `rgba(69, 123, 157, ${0.15 + Math.min(absV * 0.4, 0.8)})` : `rgba(230, 57, 70, ${0.15 + Math.min(absV * 0.4, 0.8)})`;
                                 ctx.stroke();
                             }
                         });
                     });
-                } catch(e) {
-                    // Fail silently during architectural shifts
-                }
+                } catch(e) {}
             }
 
             // Draw Nodes
             state.nodes.forEach(n => {
                 ctx.beginPath();
-                ctx.arc(n.x, n.y, n.isInput || n.isOutput ? 5 : 10, 0, Math.PI * 2);
+                ctx.arc(n.x, n.y, n.isInput || n.isOutput ? 5 : 8, 0, Math.PI * 2);
                 ctx.fillStyle = "white"; ctx.fill();
                 ctx.strokeStyle = n.isInput ? "var(--light-teal)" : (n.isOutput ? state.classes[n.idx]?.color || "var(--light-teal)" : "var(--dark-blue)");
                 ctx.lineWidth = 2.5; ctx.stroke();
@@ -443,27 +441,41 @@
             requestAnimationFrame(renderLoop);
         }
 
-        function runInference() {
-            if (!state.webcamActive || video.videoWidth === 0 || !state.model || state.isTraining) return;
+        async function runInference() {
+            if (isInferring || !state.webcamActive || !video || video.readyState < 2 || video.videoWidth === 0 || !state.model || state.isTraining) return;
             
+            isInferring = true;
             try {
-                tf.tidy(() => {
+                const predTensor = tf.tidy(() => {
                     const img = tf.browser.fromPixels(video);
-                    const input = tf.image.resizeBilinear(img, [28, 28]).mean(2).div(255).flatten().expandDims(0);
-                    const pred = state.model.predict(input).dataSync();
-                    pred.forEach((p, i) => {
-                        const bar = document.getElementById(`bar-${i}`);
-                        const lbl = document.getElementById(`prob-${i}`);
-                        if (bar) bar.style.width = `${p * 100}%`;
-                        if (lbl) lbl.innerText = `${Math.round(p * 100)}%`;
-                    });
+                    // Zero-center [-1, 1] normalization matching training data
+                    const input = tf.image.resizeBilinear(img, [28, 28])
+                        .mean(2)
+                        .div(255)
+                        .sub(0.5)
+                        .mul(2)
+                        .flatten()
+                        .expandDims(0);
+                    return state.model.predict(input);
+                });
+
+                const preds = await predTensor.data();
+                predTensor.dispose();
+
+                preds.forEach((p, i) => {
+                    const bar = document.getElementById(`bar-${i}`);
+                    const lbl = document.getElementById(`prob-${i}`);
+                    const pct = Math.min(100, Math.max(0, p * 100));
+                    if (bar) bar.style.width = `${pct.toFixed(1)}%`;
+                    if (lbl) lbl.innerText = `${Math.round(pct)}%`;
                 });
             } catch(e) {
-                // Prevent uninitialized tensors from crashing the loop
+                // Ignore transient frame skips
+            } finally {
+                isInferring = false;
             }
         }
 
-        // Interface Management
         function updateUI() {
             const list = document.getElementById('classList');
             const res = document.getElementById('results');
@@ -502,7 +514,7 @@
                         e.preventDefault(); 
                         btn.classList.add('is-capturing'); 
                         btn.innerText = "RECORDING...";
-                        state.captureInterval = setInterval(() => captureFrame(i), 120); 
+                        state.captureInterval = setInterval(() => captureFrame(i), 100); 
                     };
                     const stop = () => { 
                         btn.classList.remove('is-capturing'); 
@@ -521,16 +533,14 @@
         }
 
         async function captureFrame(idx) {
-            if (!state.webcamActive || video.videoWidth === 0) return;
+            if (!state.webcamActive || !video || video.readyState < 2 || video.videoWidth === 0) return;
 
             try {
-                // Generate thumbnail for inspector
                 const hiddenCanvas = document.createElement('canvas');
                 hiddenCanvas.width = 36;
                 hiddenCanvas.height = 36;
                 const hCtx = hiddenCanvas.getContext('2d');
                 
-                // Crop center square roughly
                 const size = Math.min(video.videoWidth, video.videoHeight);
                 const startX = (video.videoWidth - size) / 2;
                 const startY = (video.videoHeight - size) / 2;
@@ -540,7 +550,13 @@
 
                 tf.tidy(() => {
                     const img = tf.browser.fromPixels(video);
-                    const d = tf.image.resizeBilinear(img, [28, 28]).mean(2).div(255).flatten();
+                    // Zero-center [-1, 1] normalization
+                    const d = tf.image.resizeBilinear(img, [28, 28])
+                        .mean(2)
+                        .div(255)
+                        .sub(0.5)
+                        .mul(2)
+                        .flatten();
                     
                     state.classes[idx].data.push({
                         id: Date.now() + Math.random().toString(36).substr(2, 5),
@@ -615,7 +631,6 @@
         function addClass() {
             if(state.isTraining) return;
             if (state.classes.length >= 6) return alert("Maximum class label density reached.");
-            // Extended palette using requested colors + variations
             const palette = ['#457B9D', '#E63946', '#A8DADC', '#1D3557', '#e76f51', '#2a9d8f'];
             const id = state.classes.length;
             state.classes.push({ id, name: `Target ${String.fromCharCode(65+id)}`, data: [], color: palette[id % palette.length] });
@@ -624,7 +639,7 @@
 
         function modifyLayers(v) {
             if(state.isTraining) return;
-            if (v > 0 && state.layers.length < 5) state.layers.push(4);
+            if (v > 0 && state.layers.length < 5) state.layers.push(6);
             else if (v < 0 && state.layers.length > 1) state.layers.pop();
             rebuildModel();
         }
@@ -633,7 +648,7 @@
         canvas.onpointerdown = (e) => {
             const r = canvas.getBoundingClientRect();
             const mx = e.clientX - r.left, my = e.clientY - r.top;
-            const node = state.nodes.find(n => Math.hypot(n.x - mx, n.y - my) < 24);
+            const node = state.nodes.find(n => Math.hypot(n.x - mx, n.y - my) < 20);
             if (node) {
                 state.draggedNode = node;
                 if (!node.isInput && !node.isOutput) openEditor(node);
@@ -654,7 +669,6 @@
             ed.classList.add('active');
             
             try {
-                // Dense layers start at layer index 1. state.model.layers is zero-indexed.
                 const bias = state.model.layers[node.layer - 1].getWeights()[1].dataSync()[node.idx];
                 document.getElementById('biasInput').value = bias.toFixed(2);
                 
@@ -677,7 +691,6 @@
 
         function closeEditor() { document.getElementById('nodeEditor').classList.remove('active'); }
 
-        // Charts & Handlers
         function initCharts() {
             lossChart = new Chart(document.getElementById('lossChart'), {
                 type: 'line',
@@ -687,7 +700,7 @@
         }
 
         function updateLoss(l) {
-            if(!lossChart) return;
+            if(!lossChart || isNaN(l)) return;
             lossChart.data.labels.push("");
             lossChart.data.datasets[0].data.push(l);
             if (lossChart.data.labels.length > 50) { lossChart.data.labels.shift(); lossChart.data.datasets[0].data.shift(); }
@@ -697,7 +710,7 @@
         document.getElementById('trainBtn').onclick = train;
         document.getElementById('lrRange').oninput = (e) => {
             state.lr = parseFloat(e.target.value);
-            document.getElementById('lrVal').innerText = state.lr.toFixed(3);
+            document.getElementById('lrVal').innerText = state.lr.toFixed(4);
             if (state.model && !state.isTraining) state.model.optimizer = tf.train.adam(state.lr);
         };
         document.getElementById('activationSelect').onchange = rebuildModel;
